@@ -27,9 +27,21 @@ public abstract class MinecraftMixin {
 	/** How far in front of the eyes the air-placed anchor goes. Stays inside vanilla reach. */
 	private static final double AIR_PLACE_DISTANCE = 4.5;
 
+	/** The mod only does anything while one of these is in your main hand or offhand. */
+	private static boolean fastanchor$isTarget(ItemStack stack) {
+		return stack.is(Items.TOTEM_OF_UNDYING)
+			|| stack.is(Items.RESPAWN_ANCHOR)
+			|| stack.is(Items.GLOWSTONE);
+	}
+
+	private static boolean fastanchor$holdingTarget(LocalPlayer player) {
+		return fastanchor$isTarget(player.getMainHandItem())
+			|| fastanchor$isTarget(player.getOffhandItem());
+	}
+
 	/**
-	 * Air place: if you are holding a respawn anchor and pointing at nothing,
-	 * place it at the spot in front of you instead of doing nothing.
+	 * Air place: if you are holding a totem, anchor or glowstone, have a respawn anchor
+	 * in a hand, and point at nothing, the anchor is placed in front of you.
 	 */
 	@Inject(method = "startUseItem", at = @At("HEAD"), cancellable = true)
 	private void fastanchor$airPlace(CallbackInfo ci) {
@@ -37,6 +49,9 @@ public abstract class MinecraftMixin {
 		LocalPlayer player = mc.player;
 		if (player == null || mc.gameMode == null || mc.level == null) {
 			return;
+		}
+		if (!fastanchor$holdingTarget(player)) {
+			return; // not holding totem / anchor / glowstone: vanilla behaviour
 		}
 
 		HitResult hit = mc.hitResult;
@@ -66,11 +81,15 @@ public abstract class MinecraftMixin {
 	}
 
 	/**
-	 * Fast placement: remove the 4 tick wait after every right click, so holding
-	 * the button places / charges every tick.
+	 * Fast placement: remove the 4 tick wait after every right click, but only
+	 * while holding a totem, anchor or glowstone.
 	 */
 	@Inject(method = "startUseItem", at = @At("RETURN"))
 	private void fastanchor$noCooldown(CallbackInfo ci) {
-		this.rightClickDelay = 0;
+		Minecraft mc = (Minecraft) (Object) this;
+		LocalPlayer player = mc.player;
+		if (player != null && fastanchor$holdingTarget(player)) {
+			this.rightClickDelay = 0;
+		}
 	}
 }
