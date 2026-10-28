@@ -2,7 +2,7 @@
 	"schemaVersion": 1,
 	"id": "fastanchor",
 	"version": "${version}",
-	"name": "LitTwoAnchorOptimizer",
+	"name": "LitTwo Optimizer",
 	"description": "Adjustable-speed anchor placing and air place. Only works while holding a totem, respawn anchor or glowstone. Toggle and speed keys in Controls.",
 	"authors": [],
 	"license": "MIT",

@@ -59,7 +59,7 @@ public class FastAnchorClient implements ClientModInitializer {
 		if (!welcomed && client.player != null) {
 			welcomed = true;
 			client.player.displayClientMessage(Component.literal(
-				"[LitTwoAnchorOptimizer] loaded.  / = on/off   \\ = empty-space air place   [ ] = speed"), false);
+				"[LitTwo Optimizer] loaded.  / = on/off   \\ = empty-space air place   [ ] = speed"), false);
 		}
 
 		while (toggleKey.consumeClick()) {
@@ -88,7 +88,7 @@ public class FastAnchorClient implements ClientModInitializer {
 		if (client.player == null) {
 			return;
 		}
-		String text = "[LitTwoAnchorOptimizer] " + (FastAnchorConfig.enabled ? "ON" : "OFF")
+		String text = "[LitTwo Optimizer] " + (FastAnchorConfig.enabled ? "ON" : "OFF")
 			+ "  |  delay " + FastAnchorConfig.delay
 			+ " tick" + (FastAnchorConfig.delay == 1 ? "" : "s")
 			+ " (0 = fastest, " + FastAnchorConfig.MAX_DELAY + " = vanilla)"
