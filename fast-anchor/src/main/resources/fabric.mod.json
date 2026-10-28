@@ -3,15 +3,21 @@
 	"id": "fastanchor",
 	"version": "${version}",
 	"name": "Fast Anchor Optimizer",
-	"description": "Places respawn anchors faster and lets you air place them. Always on, no toggles.",
+	"description": "Adjustable-speed anchor placing and air place. Only works while holding a totem, respawn anchor or glowstone. Toggle and speed keys in Controls.",
 	"authors": [],
 	"license": "MIT",
 	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.fastanchor.FastAnchorClient"
+		]
+	},
 	"mixins": [
 		"fastanchor.mixins.json"
 	],
 	"depends": {
 		"fabricloader": ">=0.16.0",
+		"fabric-api": "*",
 		"minecraft": "~1.21.11",
 		"java": ">=21"
 	}

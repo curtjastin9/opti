@@ -1,5 +1,6 @@
 package com.fastanchor.mixin;
 
+import com.fastanchor.FastAnchorConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -34,14 +35,15 @@ public abstract class MinecraftMixin {
 			|| stack.is(Items.GLOWSTONE);
 	}
 
-	private static boolean fastanchor$holdingTarget(LocalPlayer player) {
-		return fastanchor$isTarget(player.getMainHandItem())
-			|| fastanchor$isTarget(player.getOffhandItem());
+	private static boolean fastanchor$active(LocalPlayer player) {
+		return FastAnchorConfig.enabled
+			&& (fastanchor$isTarget(player.getMainHandItem())
+			|| fastanchor$isTarget(player.getOffhandItem()));
 	}
 
 	/**
-	 * Air place: if you are holding a totem, anchor or glowstone, have a respawn anchor
-	 * in a hand, and point at nothing, the anchor is placed in front of you.
+	 * Air place: if the optimizer is on, you are holding a totem, anchor or glowstone,
+	 * have a respawn anchor in a hand and point at nothing, the anchor is placed in front of you.
 	 */
 	@Inject(method = "startUseItem", at = @At("HEAD"), cancellable = true)
 	private void fastanchor$airPlace(CallbackInfo ci) {
@@ -50,8 +52,8 @@ public abstract class MinecraftMixin {
 		if (player == null || mc.gameMode == null || mc.level == null) {
 			return;
 		}
-		if (!fastanchor$holdingTarget(player)) {
-			return; // not holding totem / anchor / glowstone: vanilla behaviour
+		if (!fastanchor$active(player)) {
+			return; // toggled off or not holding totem / anchor / glowstone: vanilla behaviour
 		}
 
 		HitResult hit = mc.hitResult;
@@ -73,7 +75,7 @@ public abstract class MinecraftMixin {
 			InteractionResult result = mc.gameMode.useItemOn(player, hand, fake);
 			if (result.consumesAction()) {
 				player.swing(hand);
-				this.rightClickDelay = 0;
+				this.rightClickDelay = FastAnchorConfig.delay;
 				ci.cancel();
 				return;
 			}
@@ -81,15 +83,15 @@ public abstract class MinecraftMixin {
 	}
 
 	/**
-	 * Fast placement: remove the 4 tick wait after every right click, but only
-	 * while holding a totem, anchor or glowstone.
+	 * Adjustable speed: after each right click, wait only the configured number of ticks
+	 * (vanilla waits 4), but only while the optimizer is on and you hold a totem, anchor or glowstone.
 	 */
 	@Inject(method = "startUseItem", at = @At("RETURN"))
-	private void fastanchor$noCooldown(CallbackInfo ci) {
+	private void fastanchor$setDelay(CallbackInfo ci) {
 		Minecraft mc = (Minecraft) (Object) this;
 		LocalPlayer player = mc.player;
-		if (player != null && fastanchor$holdingTarget(player)) {
-			this.rightClickDelay = 0;
+		if (player != null && fastanchor$active(player)) {
+			this.rightClickDelay = Math.min(this.rightClickDelay, FastAnchorConfig.delay);
 		}
 	}
 }
