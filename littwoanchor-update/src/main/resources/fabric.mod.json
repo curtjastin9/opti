@@ -1,0 +1,30 @@
+{
+	"schemaVersion": 1,
+	"id": "littwoanchor",
+	"version": "${version}",
+	"name": "LitTwoAnchor",
+	"description": "Client-side | Beta\nLitTwoAnchor is an early beta anchor placement optimizer, built from an idea by Dr_LitTwo and vibe-coded with a lot of help from Claude. It speeds up placing Respawn Anchors and charging them with glowstone, and only kicks in when you're holding an anchor, glowstone or a totem. Expect a few bugs and changes while it's still being worked on.\nFeatures: adjustable placement speed, faster placing for anchors, glowstone and totems, and toggle and speed keys you can rebind in Controls.\nStatus: Beta, a work in progress.",
+	"authors": [
+		"Dr_LitTwo"
+	],
+	"contributors": [
+		"Claude (vibe coding help)"
+	],
+	"license": "MIT",
+	"icon": "assets/littwoanchor/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.littwoanchor.LitTwoAnchorClient"
+		]
+	},
+	"mixins": [
+		"littwoanchor.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"fabric-api": "*",
+		"minecraft": "~1.21.11",
+		"java": ">=21"
+	}
+}
