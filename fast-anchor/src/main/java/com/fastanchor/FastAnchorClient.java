@@ -16,6 +16,9 @@ public class FastAnchorClient implements ClientModInitializer {
 	private static KeyMapping fasterKey;
 	private static KeyMapping pureAirKey;
 
+	private static boolean conflictChecked = false;
+	private static boolean welcomed = false;
+
 	@Override
 	public void onInitializeClient() {
 		FastAnchorConfig.load();
@@ -24,20 +27,41 @@ public class FastAnchorClient implements ClientModInitializer {
 			Identifier.fromNamespaceAndPath("fastanchor", "main")
 		);
 
+		// "/" = optimizer on / off
 		toggleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
-			"key.fastanchor.toggle", InputConstants.Type.KEYSYM, InputConstants.KEY_BACKSLASH, category));
+			"key.fastanchor.toggle", InputConstants.Type.KEYSYM, InputConstants.KEY_SLASH, category));
+		// "[" slower, "]" faster
 		slowerKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 			"key.fastanchor.slower", InputConstants.Type.KEYSYM, InputConstants.KEY_LBRACKET, category));
 		fasterKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 			"key.fastanchor.faster", InputConstants.Type.KEYSYM, InputConstants.KEY_RBRACKET, category));
-
+		// "\" = empty-space air place on / off
 		pureAirKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
-			"key.fastanchor.pureair", InputConstants.Type.KEYSYM, InputConstants.KEY_APOSTROPHE, category));
+			"key.fastanchor.pureair", InputConstants.Type.KEYSYM, InputConstants.KEY_BACKSLASH, category));
 
 		ClientTickEvents.END_CLIENT_TICK.register(FastAnchorClient::onTick);
 	}
 
 	private static void onTick(Minecraft client) {
+		// Minecraft's own "Open Command" key is "/" too. When two keys share one button only one of them
+		// gets the press, so the toggle never fired. Free the button once per launch.
+		if (!conflictChecked && client.options != null) {
+			conflictChecked = true;
+			KeyMapping command = client.options.keyCommand;
+			if (command.saveString().equals(toggleKey.saveString())
+				|| command.saveString().equals(pureAirKey.saveString())) {
+				command.setKey(InputConstants.UNKNOWN);
+				KeyMapping.resetMapping();
+				client.options.save();
+			}
+		}
+
+		if (!welcomed && client.player != null) {
+			welcomed = true;
+			client.player.displayClientMessage(Component.literal(
+				"[LitTwoAnchorOptimizer] loaded.  / = on/off   \\ = empty-space air place   [ ] = speed"), false);
+		}
+
 		while (toggleKey.consumeClick()) {
 			FastAnchorConfig.enabled = !FastAnchorConfig.enabled;
 			FastAnchorConfig.save();
@@ -64,11 +88,12 @@ public class FastAnchorClient implements ClientModInitializer {
 		if (client.player == null) {
 			return;
 		}
-		String state = FastAnchorConfig.enabled ? "ON" : "OFF";
-		String text = "Fast Anchor: " + state + "  |  delay " + FastAnchorConfig.delay
+		String text = "[LitTwoAnchorOptimizer] " + (FastAnchorConfig.enabled ? "ON" : "OFF")
+			+ "  |  delay " + FastAnchorConfig.delay
 			+ " tick" + (FastAnchorConfig.delay == 1 ? "" : "s")
 			+ " (0 = fastest, " + FastAnchorConfig.MAX_DELAY + " = vanilla)"
 			+ "  |  empty-space air place " + (FastAnchorConfig.pureAir ? "ON" : "OFF");
+		client.player.displayClientMessage(Component.literal(text), false);
 		client.player.displayClientMessage(Component.literal(text), true);
 	}
 }
