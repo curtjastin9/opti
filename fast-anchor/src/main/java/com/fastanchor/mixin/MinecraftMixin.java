@@ -28,22 +28,34 @@ public abstract class MinecraftMixin {
 	/** How far in front of the eyes the air-placed anchor goes. Stays inside vanilla reach. */
 	private static final double AIR_PLACE_DISTANCE = 4.5;
 
-	/** The mod only does anything while one of these is in your main hand or offhand. */
 	private static boolean fastanchor$isTarget(ItemStack stack) {
 		return stack.is(Items.TOTEM_OF_UNDYING)
 			|| stack.is(Items.RESPAWN_ANCHOR)
 			|| stack.is(Items.GLOWSTONE);
 	}
 
-	private static boolean fastanchor$active(LocalPlayer player) {
-		return FastAnchorConfig.enabled
-			&& (fastanchor$isTarget(player.getMainHandItem())
-			|| fastanchor$isTarget(player.getOffhandItem()));
+	/**
+	 * The hand that vanilla would actually use for this right click, but only if it holds
+	 * a totem, anchor or glowstone. Returns null otherwise (optimizer off, or any other item).
+	 * Main hand wins; the offhand is only used when the main hand is empty.
+	 */
+	private static InteractionHand fastanchor$activeHand(LocalPlayer player) {
+		if (!FastAnchorConfig.enabled) {
+			return null;
+		}
+		ItemStack main = player.getMainHandItem();
+		if (fastanchor$isTarget(main)) {
+			return InteractionHand.MAIN_HAND;
+		}
+		if (main.isEmpty() && fastanchor$isTarget(player.getOffhandItem())) {
+			return InteractionHand.OFF_HAND;
+		}
+		return null;
 	}
 
 	/**
-	 * Air place: if the optimizer is on, you are holding a totem, anchor or glowstone,
-	 * have a respawn anchor in a hand and point at nothing, the anchor is placed in front of you.
+	 * Air place: only when the item being used is a respawn anchor and you point at nothing.
+	 * Any other item (blocks, tools, etc.) behaves exactly like vanilla.
 	 */
 	@Inject(method = "startUseItem", at = @At("HEAD"), cancellable = true)
 	private void fastanchor$airPlace(CallbackInfo ci) {
@@ -52,8 +64,13 @@ public abstract class MinecraftMixin {
 		if (player == null || mc.gameMode == null || mc.level == null) {
 			return;
 		}
-		if (!fastanchor$active(player)) {
-			return; // toggled off or not holding totem / anchor / glowstone: vanilla behaviour
+
+		InteractionHand hand = fastanchor$activeHand(player);
+		if (hand == null) {
+			return; // not holding totem / anchor / glowstone: vanilla behaviour
+		}
+		if (!player.getItemInHand(hand).is(Items.RESPAWN_ANCHOR)) {
+			return; // glowstone / totem: nothing to air place
 		}
 
 		HitResult hit = mc.hitResult;
@@ -61,36 +78,28 @@ public abstract class MinecraftMixin {
 			return; // aiming at a real block or entity: vanilla behaviour
 		}
 
-		for (InteractionHand hand : InteractionHand.values()) {
-			ItemStack stack = player.getItemInHand(hand);
-			if (!stack.is(Items.RESPAWN_ANCHOR)) {
-				continue;
-			}
+		Vec3 target = player.getEyePosition().add(player.getViewVector(1.0F).scale(AIR_PLACE_DISTANCE));
+		BlockPos pos = BlockPos.containing(target);
 
-			Vec3 target = player.getEyePosition().add(player.getViewVector(1.0F).scale(AIR_PLACE_DISTANCE));
-			BlockPos pos = BlockPos.containing(target);
-
-			// Click the (empty) block position itself. Air is replaceable, so the anchor lands right there.
-			BlockHitResult fake = new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false);
-			InteractionResult result = mc.gameMode.useItemOn(player, hand, fake);
-			if (result.consumesAction()) {
-				player.swing(hand);
-				this.rightClickDelay = FastAnchorConfig.delay;
-				ci.cancel();
-				return;
-			}
+		// Click the (empty) block position itself. Air is replaceable, so the anchor lands right there.
+		BlockHitResult fake = new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false);
+		InteractionResult result = mc.gameMode.useItemOn(player, hand, fake);
+		if (result.consumesAction()) {
+			player.swing(hand);
+			this.rightClickDelay = FastAnchorConfig.delay;
+			ci.cancel();
 		}
 	}
 
 	/**
 	 * Adjustable speed: after each right click, wait only the configured number of ticks
-	 * (vanilla waits 4), but only while the optimizer is on and you hold a totem, anchor or glowstone.
+	 * (vanilla waits 4), but only when the item in use is a totem, anchor or glowstone.
 	 */
 	@Inject(method = "startUseItem", at = @At("RETURN"))
 	private void fastanchor$setDelay(CallbackInfo ci) {
 		Minecraft mc = (Minecraft) (Object) this;
 		LocalPlayer player = mc.player;
-		if (player != null && fastanchor$active(player)) {
+		if (player != null && fastanchor$activeHand(player) != null) {
 			this.rightClickDelay = Math.min(this.rightClickDelay, FastAnchorConfig.delay);
 		}
 	}
