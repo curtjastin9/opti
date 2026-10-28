@@ -20,11 +20,18 @@ jobs:
           gradle-version: 9.2.1
 
       - name: Build jar
-        working-directory: fast-anchor
-        run: gradle build
+        run: |
+          SETTINGS=$(find . -name settings.gradle | head -n 1)
+          if [ -z "$SETTINGS" ]; then
+            echo "settings.gradle not found. Files in the repo:"
+            find . -not -path './.git/*' -type f
+            exit 1
+          fi
+          cd "$(dirname "$SETTINGS")"
+          gradle build
 
       - name: Upload jar
         uses: actions/upload-artifact@v4
         with:
-          name: fast-anchor-optimizer-jar
-          path: fast-anchor/build/libs/*.jar
+          name: littwoanchor-jar
+          path: "**/build/libs/*.jar"
