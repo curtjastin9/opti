@@ -9,6 +9,9 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -27,6 +30,9 @@ public abstract class MinecraftMixin {
 
 	/** How far in front of the eyes the air-placed anchor goes. Stays inside vanilla reach. */
 	private static final double AIR_PLACE_DISTANCE = 4.5;
+
+	/** An anchor never gets more than this many glowstone charges (vanilla allows 4). */
+	private static final int MAX_CHARGE = 1;
 
 	private static boolean fastanchor$isTarget(ItemStack stack) {
 		return stack.is(Items.TOTEM_OF_UNDYING)
@@ -53,18 +59,34 @@ public abstract class MinecraftMixin {
 		return null;
 	}
 
-	/**
-	 * Air place: only when the item being used is a respawn anchor and you point at nothing.
-	 * Any other item (blocks, tools, etc.) behaves exactly like vanilla.
-	 */
 	@Inject(method = "startUseItem", at = @At("HEAD"), cancellable = true)
-	private void fastanchor$airPlace(CallbackInfo ci) {
+	private void fastanchor$onUse(CallbackInfo ci) {
 		Minecraft mc = (Minecraft) (Object) this;
 		LocalPlayer player = mc.player;
 		if (player == null || mc.gameMode == null || mc.level == null) {
 			return;
 		}
+		if (!FastAnchorConfig.enabled) {
+			return;
+		}
 
+		HitResult hit = mc.hitResult;
+
+		// Charge limit: never put more than MAX_CHARGE glowstone into an anchor.
+		// Clicking an already charged anchor with glowstone in either hand does nothing.
+		boolean glowstoneInHand = player.getMainHandItem().is(Items.GLOWSTONE)
+			|| player.getOffhandItem().is(Items.GLOWSTONE);
+		if (glowstoneInHand && hit instanceof BlockHitResult blockHit && hit.getType() == HitResult.Type.BLOCK) {
+			BlockState state = mc.level.getBlockState(blockHit.getBlockPos());
+			if (state.is(Blocks.RESPAWN_ANCHOR)
+				&& state.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= MAX_CHARGE) {
+				ci.cancel();
+				return;
+			}
+		}
+
+		// Air place: only when the item being used is a respawn anchor and you point at nothing.
+		// Any other item (blocks, tools, etc.) behaves exactly like vanilla.
 		InteractionHand hand = fastanchor$activeHand(player);
 		if (hand == null) {
 			return; // not holding totem / anchor / glowstone: vanilla behaviour
@@ -72,8 +94,6 @@ public abstract class MinecraftMixin {
 		if (!player.getItemInHand(hand).is(Items.RESPAWN_ANCHOR)) {
 			return; // glowstone / totem: nothing to air place
 		}
-
-		HitResult hit = mc.hitResult;
 		if (hit != null && hit.getType() != HitResult.Type.MISS) {
 			return; // aiming at a real block or entity: vanilla behaviour
 		}
