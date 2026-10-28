@@ -14,6 +14,7 @@ public class FastAnchorClient implements ClientModInitializer {
 	private static KeyMapping toggleKey;
 	private static KeyMapping slowerKey;
 	private static KeyMapping fasterKey;
+	private static KeyMapping pureAirKey;
 
 	@Override
 	public void onInitializeClient() {
@@ -24,11 +25,14 @@ public class FastAnchorClient implements ClientModInitializer {
 		);
 
 		toggleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
-			"key.fastanchor.toggle", InputConstants.Type.KEYSYM, InputConstants.KEY_SLASH, category));
+			"key.fastanchor.toggle", InputConstants.Type.KEYSYM, InputConstants.KEY_BACKSLASH, category));
 		slowerKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 			"key.fastanchor.slower", InputConstants.Type.KEYSYM, InputConstants.KEY_LBRACKET, category));
 		fasterKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 			"key.fastanchor.faster", InputConstants.Type.KEYSYM, InputConstants.KEY_RBRACKET, category));
+
+		pureAirKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+			"key.fastanchor.pureair", InputConstants.Type.KEYSYM, InputConstants.KEY_APOSTROPHE, category));
 
 		ClientTickEvents.END_CLIENT_TICK.register(FastAnchorClient::onTick);
 	}
@@ -36,6 +40,11 @@ public class FastAnchorClient implements ClientModInitializer {
 	private static void onTick(Minecraft client) {
 		while (toggleKey.consumeClick()) {
 			FastAnchorConfig.enabled = !FastAnchorConfig.enabled;
+			FastAnchorConfig.save();
+			announce(client);
+		}
+		while (pureAirKey.consumeClick()) {
+			FastAnchorConfig.pureAir = !FastAnchorConfig.pureAir;
 			FastAnchorConfig.save();
 			announce(client);
 		}
@@ -58,7 +67,8 @@ public class FastAnchorClient implements ClientModInitializer {
 		String state = FastAnchorConfig.enabled ? "ON" : "OFF";
 		String text = "Fast Anchor: " + state + "  |  delay " + FastAnchorConfig.delay
 			+ " tick" + (FastAnchorConfig.delay == 1 ? "" : "s")
-			+ " (0 = fastest, " + FastAnchorConfig.MAX_DELAY + " = vanilla)";
+			+ " (0 = fastest, " + FastAnchorConfig.MAX_DELAY + " = vanilla)"
+			+ "  |  empty-space air place " + (FastAnchorConfig.pureAir ? "ON" : "OFF");
 		client.player.displayClientMessage(Component.literal(text), true);
 	}
 }

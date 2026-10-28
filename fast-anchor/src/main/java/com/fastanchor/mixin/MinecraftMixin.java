@@ -15,6 +15,7 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -38,14 +39,21 @@ public abstract class MinecraftMixin {
 	/** Minimum ticks between two air placements, so the server can keep up (prevents ghost anchors). */
 	private static final int AIR_PLACE_GAP_TICKS = 4;
 
-	/**
-	 * true  = if nothing solid touches the spot, still click empty space (strict anti cheat servers may reject it).
-	 * false = only place when a solid block touches the spot (never ghosts, but not a true air place).
-	 */
-	private static final boolean PURE_AIR_PLACE = true;
+	/** Ticks a freshly placed anchor must exist before glowstone may be used on it (lets the server confirm it). */
+	private static final int CONFIRM_TICKS = 3;
 
 	@Unique
 	private long fastanchor$lastAirPlace = -100L;
+
+	/** Where the last anchor we placed is, and when. */
+	@Unique
+	private BlockPos fastanchor$placedPos = null;
+	@Unique
+	private long fastanchor$placedAt = -100L;
+
+	/** Spot a normal placement is about to fill (checked after the click). */
+	@Unique
+	private BlockPos fastanchor$pendingPos = null;
 
 	private static boolean fastanchor$isTarget(ItemStack stack) {
 		return stack.is(Items.TOTEM_OF_UNDYING)
@@ -91,12 +99,21 @@ public abstract class MinecraftMixin {
 			|| player.getOffhandItem().is(Items.GLOWSTONE);
 		if (glowstoneInHand && hit instanceof BlockHitResult blockHit && hit.getType() == HitResult.Type.BLOCK) {
 			BlockState state = mc.level.getBlockState(blockHit.getBlockPos());
-			if (state.is(Blocks.RESPAWN_ANCHOR)
-				&& state.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= MAX_CHARGE) {
-				ci.cancel();
-				return;
+			if (state.is(Blocks.RESPAWN_ANCHOR)) {
+				// Anti ghost glowstone: do not spend glowstone on an anchor the server has not had time
+				// to confirm yet. If the placement was refused the anchor disappears within a few ticks,
+				// and the glowstone is never used on it (so it can not "come back").
+				boolean unconfirmed = blockHit.getBlockPos().equals(this.fastanchor$placedPos)
+					&& mc.level.getGameTime() - this.fastanchor$placedAt < CONFIRM_TICKS;
+				if (unconfirmed
+					|| state.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= MAX_CHARGE) {
+					ci.cancel();
+					return;
+				}
 			}
 		}
+
+		this.fastanchor$pendingPos = null;
 
 		// Air place: only when the item being used is a respawn anchor and you point at nothing.
 		// Any other item (blocks, tools, etc.) behaves exactly like vanilla.
@@ -113,10 +130,18 @@ public abstract class MinecraftMixin {
 		if (hit instanceof BlockHitResult anchorHit && hit.getType() == HitResult.Type.BLOCK) {
 			BlockState aimed = mc.level.getBlockState(anchorHit.getBlockPos());
 			if (aimed.is(Blocks.RESPAWN_ANCHOR)) {
+				int charge = aimed.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES);
+				boolean glowstoneInOffhand = player.getOffhandItem().is(Items.GLOWSTONE);
+
+				// Pop: a charged anchor clicked with an anchor in hand is left to vanilla, which detonates it.
+				// (With glowstone in the offhand vanilla would stack a second anchor instead, so that is blocked.)
+				if (charge >= 1 && !glowstoneInOffhand) {
+					return;
+				}
+
 				// Glowstone in the offhand and the anchor not full yet: charge it with that glowstone
 				// (vanilla would try to place a second anchor here). Otherwise just ignore the click.
-				if (player.getOffhandItem().is(Items.GLOWSTONE)
-					&& aimed.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) < MAX_CHARGE) {
+				if (glowstoneInOffhand && charge < MAX_CHARGE) {
 					InteractionResult charged = mc.gameMode.useItemOn(player, InteractionHand.OFF_HAND, anchorHit);
 					if (charged.consumesAction()) {
 						player.swing(InteractionHand.OFF_HAND);
@@ -124,8 +149,12 @@ public abstract class MinecraftMixin {
 					}
 				}
 				ci.cancel();
+				return;
 			}
-			return; // otherwise aiming at a real block: vanilla behaviour
+			// Normal placement against a block: remember where the anchor will appear so we can
+			// tell once the server has had time to confirm it.
+			this.fastanchor$pendingPos = anchorHit.getBlockPos().relative(anchorHit.getDirection());
+			return; // vanilla behaviour
 		}
 		if (hit != null && hit.getType() != HitResult.Type.MISS) {
 			return; // aiming at an entity: vanilla behaviour
@@ -141,8 +170,11 @@ public abstract class MinecraftMixin {
 		Vec3 target = player.getEyePosition().add(player.getViewVector(1.0F).scale(AIR_PLACE_DISTANCE));
 		BlockPos pos = BlockPos.containing(target);
 
-		// Air place only into empty space that has no anchor in or right next to it.
-		if (!mc.level.getBlockState(pos).isAir()) {
+		// Air place only into empty space that has no anchor in or right next to it,
+		// and where nothing (you, a player, a mob) is standing. The server refuses
+		// those spots, which is what made anchors vanish after being placed.
+		if (!mc.level.getBlockState(pos).isAir()
+			|| !mc.level.isUnobstructed(Blocks.RESPAWN_ANCHOR.defaultBlockState(), pos, CollisionContext.of(player))) {
 			ci.cancel();
 			return;
 		}
@@ -171,7 +203,7 @@ public abstract class MinecraftMixin {
 			}
 		}
 		if (placeHit == null) {
-			if (!PURE_AIR_PLACE) {
+			if (!FastAnchorConfig.pureAir) {
 				ci.cancel();
 				return;
 			}
@@ -183,6 +215,8 @@ public abstract class MinecraftMixin {
 		if (result.consumesAction()) {
 			player.swing(hand);
 			this.fastanchor$lastAirPlace = now;
+			this.fastanchor$placedPos = pos;
+			this.fastanchor$placedAt = now;
 			this.rightClickDelay = FastAnchorConfig.delay;
 			ci.cancel();
 		}
@@ -196,6 +230,16 @@ public abstract class MinecraftMixin {
 	private void fastanchor$setDelay(CallbackInfo ci) {
 		Minecraft mc = (Minecraft) (Object) this;
 		LocalPlayer player = mc.player;
+
+		// Remember anchors placed the normal way, so glowstone waits until the server confirmed them.
+		if (this.fastanchor$pendingPos != null && mc.level != null) {
+			if (mc.level.getBlockState(this.fastanchor$pendingPos).is(Blocks.RESPAWN_ANCHOR)) {
+				this.fastanchor$placedPos = this.fastanchor$pendingPos;
+				this.fastanchor$placedAt = mc.level.getGameTime();
+			}
+			this.fastanchor$pendingPos = null;
+		}
+
 		if (player != null && fastanchor$activeHand(player) != null) {
 			this.rightClickDelay = Math.min(this.rightClickDelay, FastAnchorConfig.delay);
 		}

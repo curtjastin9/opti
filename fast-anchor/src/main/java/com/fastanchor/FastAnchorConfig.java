@@ -18,6 +18,12 @@ public final class FastAnchorConfig {
 	public static boolean enabled = true;
 	/** Ticks to wait between right clicks while the optimizer is active. */
 	public static int delay = 2;
+	/**
+	 * true  = when no solid block touches the target spot, click empty space itself (true air place;
+	 *         strict servers may refuse it and the anchor vanishes).
+	 * false = only place next to a solid block (never ghosts).
+	 */
+	public static boolean pureAir = false;
 
 	private FastAnchorConfig() {
 	}
@@ -37,9 +43,11 @@ public final class FastAnchorConfig {
 			props.load(reader);
 			enabled = Boolean.parseBoolean(props.getProperty("enabled", "true"));
 			delay = clamp(Integer.parseInt(props.getProperty("delay", "2").trim()));
+			pureAir = Boolean.parseBoolean(props.getProperty("pureAir", "false"));
 		} catch (IOException | NumberFormatException e) {
 			enabled = true;
 			delay = 2;
+			pureAir = false;
 		}
 	}
 
@@ -47,6 +55,7 @@ public final class FastAnchorConfig {
 		Properties props = new Properties();
 		props.setProperty("enabled", Boolean.toString(enabled));
 		props.setProperty("delay", Integer.toString(delay));
+		props.setProperty("pureAir", Boolean.toString(pureAir));
 		try (Writer writer = Files.newBufferedWriter(file())) {
 			props.store(writer, "Fast Anchor Optimizer. delay: 0 (fastest) to 4 (vanilla speed)");
 		} catch (IOException ignored) {
