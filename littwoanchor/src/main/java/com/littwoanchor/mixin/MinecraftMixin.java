@@ -65,6 +65,13 @@ public abstract class MinecraftMixin {
 	@Unique
 	private boolean littwoanchor$placeLatch = false;
 
+	/**
+	 * Set after a glowstone was used on an anchor. While right click stays held down no more glowstone
+	 * is used (no spam charging, dragging over anchors does nothing). Released when right click is let go.
+	 */
+	@Unique
+	private boolean littwoanchor$glowLatch = false;
+
 	/** Glowstone click that came too early (anchor not confirmed by the server yet). It is done as soon as it is safe. */
 	@Unique
 	private BlockHitResult littwoanchor$queuedHit = null;
@@ -134,14 +141,16 @@ public abstract class MinecraftMixin {
 	}
 
 	/**
-	 * Every tick: release the placement latch once right click is let go, and finish a queued
+	 * Every tick: release the latches once right click is let go, and finish a queued
 	 * glowstone charge as soon as the server has had time to confirm the anchor.
 	 */
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void littwoanchor$onTick(CallbackInfo ci) {
 		Minecraft mc = (Minecraft) (Object) this;
-		if (mc.options != null && !mc.options.keyUse.isDown()) {
+		boolean useHeld = mc.options != null && mc.options.keyUse.isDown();
+		if (!useHeld) {
 			this.littwoanchor$placeLatch = false;
+			this.littwoanchor$glowLatch = false;
 		}
 
 		BlockHitResult queued = this.littwoanchor$queuedHit;
@@ -176,7 +185,10 @@ public abstract class MinecraftMixin {
 		InteractionResult result = mc.gameMode.useItemOn(player, hand, queued);
 		if (result.consumesAction()) {
 			player.swing(hand);
-			this.rightClickDelay = LitTwoAnchorConfig.delay;
+			this.rightClickDelay = LitTwoAnchorConfig.MAX_DELAY; // glowstone always at vanilla speed
+			if (useHeld) {
+				this.littwoanchor$glowLatch = true;
+			}
 		}
 	}
 
@@ -193,14 +205,19 @@ public abstract class MinecraftMixin {
 
 		HitResult hit = mc.hitResult;
 
-		// Charge limit: never put more than MAX_CHARGE glowstone into an anchor.
-		// Clicking an already charged anchor with glowstone in either hand does nothing.
+		// Glowstone on an anchor.
 		boolean glowstoneInHand = player.getMainHandItem().is(Items.GLOWSTONE)
 			|| player.getOffhandItem().is(Items.GLOWSTONE);
 		if (glowstoneInHand && hit instanceof BlockHitResult blockHit && hit.getType() == HitResult.Type.BLOCK) {
 			BlockState state = mc.level.getBlockState(blockHit.getBlockPos());
 			if (state.is(Blocks.RESPAWN_ANCHOR)) {
+				// Charge limit: never put more than MAX_CHARGE glowstone into an anchor.
 				if (state.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= MAX_CHARGE) {
+					ci.cancel();
+					return;
+				}
+				// No spam: one glowstone per click. Holding right click or dragging over anchors does nothing.
+				if (this.littwoanchor$glowLatch) {
 					ci.cancel();
 					return;
 				}
@@ -210,6 +227,11 @@ public abstract class MinecraftMixin {
 					littwoanchor$queueCharge(mc, blockHit);
 					ci.cancel();
 					return;
+				}
+				// Vanilla is about to use the glowstone: block further glowstone until right click is released.
+				ItemStack main = player.getMainHandItem();
+				if (main.is(Items.GLOWSTONE) || (main.isEmpty() && player.getOffhandItem().is(Items.GLOWSTONE))) {
+					this.littwoanchor$glowLatch = true;
 				}
 			}
 		}
@@ -226,19 +248,11 @@ public abstract class MinecraftMixin {
 			return; // glowstone / totem: nothing to air place
 		}
 
-		// No stacking: with an anchor in hand, clicking an existing anchor does nothing,
-		// so a fast double click can never place a second anchor against the first one.
 		if (hit instanceof BlockHitResult anchorHit && hit.getType() == HitResult.Type.BLOCK) {
 			BlockState aimed = mc.level.getBlockState(anchorHit.getBlockPos());
 			if (aimed.is(Blocks.RESPAWN_ANCHOR)) {
 				int charge = aimed.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES);
 				boolean glowstoneInOffhand = player.getOffhandItem().is(Items.GLOWSTONE);
-
-				// Pop: a charged anchor clicked with an anchor in hand is left to vanilla, which detonates it.
-				// (With glowstone in the offhand vanilla would stack a second anchor instead, so that is blocked.)
-				if (charge >= 1 && !glowstoneInOffhand) {
-					return;
-				}
 
 				// Glowstone in the offhand and the anchor not full yet: charge it with that glowstone
 				// (vanilla would try to place a second anchor here).
@@ -246,11 +260,18 @@ public abstract class MinecraftMixin {
 					InteractionResult charged = mc.gameMode.useItemOn(player, InteractionHand.OFF_HAND, anchorHit);
 					if (charged.consumesAction()) {
 						player.swing(InteractionHand.OFF_HAND);
-						this.rightClickDelay = LitTwoAnchorConfig.delay;
+						this.rightClickDelay = LitTwoAnchorConfig.MAX_DELAY; // glowstone always at vanilla speed
+						this.littwoanchor$glowLatch = true;
 					}
+					ci.cancel();
+					return;
 				}
-				ci.cancel();
-				return;
+
+				// A charged anchor clicked with an anchor in hand is left to vanilla, which detonates it.
+				if (charge >= 1) {
+					return;
+				}
+				// An empty anchor: fall through, so you can place an anchor on top of it or on its side like normal.
 			}
 
 			// No spam: while right click is held after a placement, do not place another anchor.
@@ -258,8 +279,8 @@ public abstract class MinecraftMixin {
 				ci.cancel();
 				return;
 			}
-			// Normal placement against a block: remember where the anchor will appear so we can
-			// tell once the server has had time to confirm it.
+			// Normal placement against a block (this includes anchors): remember where the anchor will appear
+			// so we can tell once the server has had time to confirm it.
 			this.littwoanchor$pendingPos = anchorHit.getBlockPos().relative(anchorHit.getDirection());
 			return; // vanilla behaviour
 		}
@@ -283,29 +304,26 @@ public abstract class MinecraftMixin {
 		Vec3 target = player.getEyePosition().add(player.getViewVector(1.0F).scale(AIR_PLACE_DISTANCE));
 		BlockPos pos = BlockPos.containing(target);
 
-		// Air place only into empty space that has no anchor in or right next to it,
-		// and where nothing (you, a player, a mob) is standing. The server refuses
-		// those spots, which is what made anchors vanish after being placed.
+		// Air place only into empty space where nothing (you, a player, a mob) is standing.
+		// The server refuses those spots, which is what made anchors vanish after being placed.
 		if (!mc.level.getBlockState(pos).isAir()
 			|| !mc.level.isUnobstructed(Blocks.RESPAWN_ANCHOR.defaultBlockState(), pos, CollisionContext.of(player))) {
 			ci.cancel();
 			return;
 		}
-		for (Direction dir : Direction.values()) {
-			if (mc.level.getBlockState(pos.relative(dir)).is(Blocks.RESPAWN_ANCHOR)) {
-				ci.cancel();
-				return;
-			}
-		}
 
-		// Anti ghost: if a plain solid block touches that spot, place against its face like a normal
-		// placement. Servers accept that. Only when nothing touches it do we click the empty space itself.
+		// Anti ghost: if a plain solid block (or another anchor) touches that spot, place against its face
+		// like a normal placement. Servers accept that. Only when nothing touches it do we click the empty space itself.
 		BlockHitResult placeHit = null;
 		for (Direction dir : Direction.values()) {
 			BlockPos support = pos.relative(dir);
 			BlockState supportState = mc.level.getBlockState(support);
 			if (supportState.hasBlockEntity() || supportState.is(Blocks.CRAFTING_TABLE)) {
 				continue; // right clicking these would open a menu instead of placing
+			}
+			if (supportState.is(Blocks.RESPAWN_ANCHOR)
+				&& supportState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= 1) {
+				continue; // right clicking a charged anchor would detonate it
 			}
 			if (supportState.isCollisionShapeFullBlock(mc.level, support)) {
 				Direction face = dir.getOpposite();
@@ -338,7 +356,7 @@ public abstract class MinecraftMixin {
 
 	/**
 	 * Adjustable speed: after each right click, wait only the configured number of ticks
-	 * (vanilla waits 4), but only when the item in use is a totem, anchor or glowstone.
+	 * (vanilla waits 4), but only when the item in use is a totem or anchor. Glowstone stays at vanilla speed.
 	 */
 	@Inject(method = "startUseItem", at = @At("RETURN"))
 	private void littwoanchor$setDelay(CallbackInfo ci) {
@@ -355,8 +373,11 @@ public abstract class MinecraftMixin {
 			this.littwoanchor$pendingPos = null;
 		}
 
-		if (player != null && littwoanchor$activeHand(player) != null) {
-			this.rightClickDelay = Math.min(this.rightClickDelay, LitTwoAnchorConfig.delay);
+		if (player != null) {
+			InteractionHand active = littwoanchor$activeHand(player);
+			if (active != null && !player.getItemInHand(active).is(Items.GLOWSTONE)) {
+				this.rightClickDelay = Math.min(this.rightClickDelay, LitTwoAnchorConfig.delay);
+			}
 		}
 	}
 }
