@@ -168,7 +168,7 @@ public abstract class MinecraftMixin {
 			return; // still waiting for the server
 		}
 		InteractionHand hand = littwoanchor$glowstoneHand(player);
-		if (hand == null || !player.canInteractWithBlock(pos, 1.0)) {
+		if (hand == null || player.getEyePosition().distanceToSqr(Vec3.atCenterOf(pos)) > 6.0 * 6.0) {
 			this.littwoanchor$queuedHit = null;
 			return;
 		}
