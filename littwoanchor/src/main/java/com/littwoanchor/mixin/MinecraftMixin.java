@@ -39,8 +39,11 @@ public abstract class MinecraftMixin {
 	/** Minimum ticks between two air placements, so the server can keep up (prevents ghost anchors). */
 	private static final int AIR_PLACE_GAP_TICKS = 4;
 
-	/** Ticks a freshly placed anchor must exist before glowstone may be used on it (lets the server confirm it). */
+	/** Minimum ticks a freshly placed anchor must exist before glowstone may be used on it. Raised automatically by ping. */
 	private static final int CONFIRM_TICKS = 3;
+
+	/** A queued glowstone charge is dropped if it could not be done within this many ticks. */
+	private static final int QUEUE_TIMEOUT_TICKS = 40;
 
 	@Unique
 	private long littwoanchor$lastAirPlace = -100L;
@@ -54,6 +57,19 @@ public abstract class MinecraftMixin {
 	/** Spot a normal placement is about to fill (checked after the click). */
 	@Unique
 	private BlockPos littwoanchor$pendingPos = null;
+
+	/**
+	 * Set after an anchor was placed. While right click stays held down no further anchor is placed
+	 * (no spam placing). Released as soon as the right click button is let go.
+	 */
+	@Unique
+	private boolean littwoanchor$placeLatch = false;
+
+	/** Glowstone click that came too early (anchor not confirmed by the server yet). It is done as soon as it is safe. */
+	@Unique
+	private BlockHitResult littwoanchor$queuedHit = null;
+	@Unique
+	private long littwoanchor$queuedAt = -100L;
 
 	private static boolean littwoanchor$isTarget(ItemStack stack) {
 		return stack.is(Items.TOTEM_OF_UNDYING)
@@ -80,6 +96,90 @@ public abstract class MinecraftMixin {
 		return null;
 	}
 
+	/** The hand holding glowstone (main first), or null. */
+	private static InteractionHand littwoanchor$glowstoneHand(LocalPlayer player) {
+		if (player.getMainHandItem().is(Items.GLOWSTONE)) {
+			return InteractionHand.MAIN_HAND;
+		}
+		if (player.getOffhandItem().is(Items.GLOWSTONE)) {
+			return InteractionHand.OFF_HAND;
+		}
+		return null;
+	}
+
+	/** Ticks the server needs to confirm a placement: at least CONFIRM_TICKS, more on high ping. */
+	private static int littwoanchor$confirmTicks(Minecraft mc) {
+		int ticks = CONFIRM_TICKS;
+		if (mc.player != null && mc.getConnection() != null) {
+			var info = mc.getConnection().getPlayerInfo(mc.player.getUUID());
+			if (info != null) {
+				ticks = Math.max(ticks, info.getLatency() / 50 + 2);
+			}
+		}
+		return Math.min(ticks, 12);
+	}
+
+	@Unique
+	private boolean littwoanchor$isUnconfirmed(Minecraft mc, BlockPos pos) {
+		return pos.equals(this.littwoanchor$placedPos)
+			&& mc.level.getGameTime() - this.littwoanchor$placedAt < littwoanchor$confirmTicks(mc);
+	}
+
+	@Unique
+	private void littwoanchor$queueCharge(Minecraft mc, BlockHitResult hit) {
+		if (this.littwoanchor$queuedHit == null) {
+			this.littwoanchor$queuedHit = hit;
+			this.littwoanchor$queuedAt = mc.level.getGameTime();
+		}
+	}
+
+	/**
+	 * Every tick: release the placement latch once right click is let go, and finish a queued
+	 * glowstone charge as soon as the server has had time to confirm the anchor.
+	 */
+	@Inject(method = "tick", at = @At("HEAD"))
+	private void littwoanchor$onTick(CallbackInfo ci) {
+		Minecraft mc = (Minecraft) (Object) this;
+		if (mc.options != null && !mc.options.keyUse.isDown()) {
+			this.littwoanchor$placeLatch = false;
+		}
+
+		BlockHitResult queued = this.littwoanchor$queuedHit;
+		if (queued == null) {
+			return;
+		}
+		LocalPlayer player = mc.player;
+		if (player == null || mc.level == null || mc.gameMode == null || !LitTwoAnchorConfig.enabled) {
+			this.littwoanchor$queuedHit = null;
+			return;
+		}
+		BlockPos pos = queued.getBlockPos();
+		BlockState state = mc.level.getBlockState(pos);
+		long now = mc.level.getGameTime();
+
+		// The anchor is gone (server refused it) or already charged: nothing to do.
+		if (now - this.littwoanchor$queuedAt > QUEUE_TIMEOUT_TICKS
+			|| !state.is(Blocks.RESPAWN_ANCHOR)
+			|| state.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= MAX_CHARGE) {
+			this.littwoanchor$queuedHit = null;
+			return;
+		}
+		if (littwoanchor$isUnconfirmed(mc, pos)) {
+			return; // still waiting for the server
+		}
+		InteractionHand hand = littwoanchor$glowstoneHand(player);
+		if (hand == null || !player.canInteractWithBlock(pos, 1.0)) {
+			this.littwoanchor$queuedHit = null;
+			return;
+		}
+		this.littwoanchor$queuedHit = null;
+		InteractionResult result = mc.gameMode.useItemOn(player, hand, queued);
+		if (result.consumesAction()) {
+			player.swing(hand);
+			this.rightClickDelay = LitTwoAnchorConfig.delay;
+		}
+	}
+
 	@Inject(method = "startUseItem", at = @At("HEAD"), cancellable = true)
 	private void littwoanchor$onUse(CallbackInfo ci) {
 		Minecraft mc = (Minecraft) (Object) this;
@@ -100,13 +200,14 @@ public abstract class MinecraftMixin {
 		if (glowstoneInHand && hit instanceof BlockHitResult blockHit && hit.getType() == HitResult.Type.BLOCK) {
 			BlockState state = mc.level.getBlockState(blockHit.getBlockPos());
 			if (state.is(Blocks.RESPAWN_ANCHOR)) {
-				// Anti ghost glowstone: do not spend glowstone on an anchor the server has not had time
-				// to confirm yet. If the placement was refused the anchor disappears within a few ticks,
-				// and the glowstone is never used on it (so it can not "come back").
-				boolean unconfirmed = blockHit.getBlockPos().equals(this.littwoanchor$placedPos)
-					&& mc.level.getGameTime() - this.littwoanchor$placedAt < CONFIRM_TICKS;
-				if (unconfirmed
-					|| state.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= MAX_CHARGE) {
+				if (state.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= MAX_CHARGE) {
+					ci.cancel();
+					return;
+				}
+				// Anti ghost glowstone: do not spend glowstone on an anchor the server has not confirmed yet.
+				// The click is not lost: it is queued and done the moment the anchor is confirmed.
+				if (littwoanchor$isUnconfirmed(mc, blockHit.getBlockPos())) {
+					littwoanchor$queueCharge(mc, blockHit);
 					ci.cancel();
 					return;
 				}
@@ -140,7 +241,7 @@ public abstract class MinecraftMixin {
 				}
 
 				// Glowstone in the offhand and the anchor not full yet: charge it with that glowstone
-				// (vanilla would try to place a second anchor here). Otherwise just ignore the click.
+				// (vanilla would try to place a second anchor here).
 				if (glowstoneInOffhand && charge < MAX_CHARGE) {
 					InteractionResult charged = mc.gameMode.useItemOn(player, InteractionHand.OFF_HAND, anchorHit);
 					if (charged.consumesAction()) {
@@ -151,6 +252,12 @@ public abstract class MinecraftMixin {
 				ci.cancel();
 				return;
 			}
+
+			// No spam: while right click is held after a placement, do not place another anchor.
+			if (this.littwoanchor$placeLatch) {
+				ci.cancel();
+				return;
+			}
 			// Normal placement against a block: remember where the anchor will appear so we can
 			// tell once the server has had time to confirm it.
 			this.littwoanchor$pendingPos = anchorHit.getBlockPos().relative(anchorHit.getDirection());
@@ -158,6 +265,12 @@ public abstract class MinecraftMixin {
 		}
 		if (hit != null && hit.getType() != HitResult.Type.MISS) {
 			return; // aiming at an entity: vanilla behaviour
+		}
+
+		// No spam: one anchor per click. Holding right click does not place more.
+		if (this.littwoanchor$placeLatch) {
+			ci.cancel();
+			return;
 		}
 
 		// Anti ghost: never send air placements faster than the server can confirm them.
@@ -217,6 +330,7 @@ public abstract class MinecraftMixin {
 			this.littwoanchor$lastAirPlace = now;
 			this.littwoanchor$placedPos = pos;
 			this.littwoanchor$placedAt = now;
+			this.littwoanchor$placeLatch = true;
 			this.rightClickDelay = LitTwoAnchorConfig.delay;
 			ci.cancel();
 		}
@@ -236,6 +350,7 @@ public abstract class MinecraftMixin {
 			if (mc.level.getBlockState(this.littwoanchor$pendingPos).is(Blocks.RESPAWN_ANCHOR)) {
 				this.littwoanchor$placedPos = this.littwoanchor$pendingPos;
 				this.littwoanchor$placedAt = mc.level.getGameTime();
+				this.littwoanchor$placeLatch = true;
 			}
 			this.littwoanchor$pendingPos = null;
 		}
