@@ -7,6 +7,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -71,6 +72,10 @@ public abstract class MinecraftMixin {
 	 */
 	@Unique
 	private boolean littwoanchor$glowLatch = false;
+
+	/** Item that was in the main hand last tick. Switching items resets the latches, so place > glow > pop can loop while holding. */
+	@Unique
+	private Item littwoanchor$lastItem = null;
 
 	/** Anchor we just sent glowstone to, and when. The server has not necessarily confirmed the charge yet. */
 	@Unique
@@ -176,6 +181,19 @@ public abstract class MinecraftMixin {
 		if (!useHeld) {
 			this.littwoanchor$placeLatch = false;
 			this.littwoanchor$glowLatch = false;
+		}
+
+		// Switching items while holding right click starts a fresh action: place > glow > pop, over and over.
+		if (mc.player != null) {
+			Item nowItem = mc.player.getMainHandItem().getItem();
+			if (nowItem != this.littwoanchor$lastItem) {
+				if (this.littwoanchor$lastItem != null) {
+					this.littwoanchor$placeLatch = false;
+					this.littwoanchor$glowLatch = false;
+					this.rightClickDelay = Math.min(this.rightClickDelay, LitTwoAnchorConfig.delay);
+				}
+				this.littwoanchor$lastItem = nowItem;
+			}
 		}
 
 		// Finish a queued pop (glow then quickly switch and click): detonate as soon as the server shows the charge.
@@ -373,7 +391,7 @@ public abstract class MinecraftMixin {
 
 		// Anti ghost: never send air placements faster than the server can confirm them.
 		long now = mc.level.getGameTime();
-		if (now - this.littwoanchor$lastAirPlace < AIR_PLACE_GAP_TICKS) {
+		if (now - this.littwoanchor$lastAirPlace < Math.min(AIR_PLACE_GAP_TICKS, Math.max(2, LitTwoAnchorConfig.delay))) {
 			ci.cancel();
 			return;
 		}
