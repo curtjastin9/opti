@@ -72,6 +72,18 @@ public abstract class MinecraftMixin {
 	@Unique
 	private boolean littwoanchor$glowLatch = false;
 
+	/** Anchor we just sent glowstone to, and when. The server has not necessarily confirmed the charge yet. */
+	@Unique
+	private BlockPos littwoanchor$chargedPos = null;
+	@Unique
+	private long littwoanchor$chargedAt = -100L;
+
+	/** Pop click that came too early (the charge is not confirmed by the server yet). Done as soon as it is safe. */
+	@Unique
+	private BlockHitResult littwoanchor$queuedPop = null;
+	@Unique
+	private long littwoanchor$queuedPopAt = -100L;
+
 	/** Glowstone click that came too early (anchor not confirmed by the server yet). It is done as soon as it is safe. */
 	@Unique
 	private BlockHitResult littwoanchor$queuedHit = null;
@@ -132,6 +144,19 @@ public abstract class MinecraftMixin {
 			&& mc.level.getGameTime() - this.littwoanchor$placedAt < littwoanchor$confirmTicks(mc);
 	}
 
+	/** True while a glowstone we sent to this anchor is still waiting for the server to confirm the charge. */
+	@Unique
+	private boolean littwoanchor$chargePending(Minecraft mc, BlockPos pos) {
+		return pos.equals(this.littwoanchor$chargedPos)
+			&& mc.level.getGameTime() - this.littwoanchor$chargedAt < littwoanchor$confirmTicks(mc) + 2;
+	}
+
+	@Unique
+	private void littwoanchor$markCharged(Minecraft mc, BlockPos pos) {
+		this.littwoanchor$chargedPos = pos;
+		this.littwoanchor$chargedAt = mc.level.getGameTime();
+	}
+
 	@Unique
 	private void littwoanchor$queueCharge(Minecraft mc, BlockHitResult hit) {
 		if (this.littwoanchor$queuedHit == null) {
@@ -151,6 +176,33 @@ public abstract class MinecraftMixin {
 		if (!useHeld) {
 			this.littwoanchor$placeLatch = false;
 			this.littwoanchor$glowLatch = false;
+		}
+
+		// Finish a queued pop (glow then quickly switch and click): detonate as soon as the server shows the charge.
+		BlockHitResult pop = this.littwoanchor$queuedPop;
+		if (pop != null) {
+			LocalPlayer popPlayer = mc.player;
+			if (popPlayer == null || mc.level == null || mc.gameMode == null || !LitTwoAnchorConfig.enabled) {
+				this.littwoanchor$queuedPop = null;
+			} else {
+				BlockPos popPos = pop.getBlockPos();
+				BlockState popState = mc.level.getBlockState(popPos);
+				long popNow = mc.level.getGameTime();
+				ItemStack popMain = popPlayer.getMainHandItem();
+				if (popNow - this.littwoanchor$queuedPopAt > littwoanchor$confirmTicks(mc) + 2
+					|| !popState.is(Blocks.RESPAWN_ANCHOR)
+					|| popMain.is(Items.GLOWSTONE)
+					|| popPlayer.getEyePosition().distanceToSqr(Vec3.atCenterOf(popPos)) > 6.0 * 6.0) {
+					this.littwoanchor$queuedPop = null;
+				} else if (popState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= 1) {
+					this.littwoanchor$queuedPop = null;
+					InteractionResult popResult = mc.gameMode.useItemOn(popPlayer, InteractionHand.MAIN_HAND, pop);
+					if (popResult.consumesAction()) {
+						popPlayer.swing(InteractionHand.MAIN_HAND);
+						this.rightClickDelay = LitTwoAnchorConfig.delay;
+					}
+				}
+			}
 		}
 
 		BlockHitResult queued = this.littwoanchor$queuedHit;
@@ -184,6 +236,7 @@ public abstract class MinecraftMixin {
 		this.littwoanchor$queuedHit = null;
 		InteractionResult result = mc.gameMode.useItemOn(player, hand, queued);
 		if (result.consumesAction()) {
+			littwoanchor$markCharged(mc, pos);
 			player.swing(hand);
 			this.rightClickDelay = LitTwoAnchorConfig.MAX_DELAY; // glowstone always at vanilla speed
 			if (useHeld) {
@@ -204,6 +257,28 @@ public abstract class MinecraftMixin {
 		}
 
 		HitResult hit = mc.hitResult;
+
+		// Pop right after glow: you glowed the anchor and quickly switched to another item and clicked.
+		// The client may not show the charge yet, so the click would be wasted (or place an anchor on its side).
+		// Queue it and detonate the moment the server confirms the charge.
+		if (hit instanceof BlockHitResult popHit && hit.getType() == HitResult.Type.BLOCK) {
+			ItemStack popMain = player.getMainHandItem();
+			boolean glowInUse = popMain.is(Items.GLOWSTONE)
+				|| (popMain.isEmpty() && player.getOffhandItem().is(Items.GLOWSTONE));
+			BlockPos popPos = popHit.getBlockPos();
+			if (!glowInUse && littwoanchor$chargePending(mc, popPos)) {
+				BlockState popState = mc.level.getBlockState(popPos);
+				if (popState.is(Blocks.RESPAWN_ANCHOR)
+					&& popState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) < 1) {
+					if (this.littwoanchor$queuedPop == null) {
+						this.littwoanchor$queuedPop = popHit;
+						this.littwoanchor$queuedPopAt = mc.level.getGameTime();
+					}
+					ci.cancel();
+					return;
+				}
+			}
+		}
 
 		// Glowstone on an anchor.
 		boolean glowstoneInHand = player.getMainHandItem().is(Items.GLOWSTONE)
@@ -232,6 +307,7 @@ public abstract class MinecraftMixin {
 				ItemStack main = player.getMainHandItem();
 				if (main.is(Items.GLOWSTONE) || (main.isEmpty() && player.getOffhandItem().is(Items.GLOWSTONE))) {
 					this.littwoanchor$glowLatch = true;
+					littwoanchor$markCharged(mc, blockHit.getBlockPos());
 				}
 			}
 		}
@@ -262,6 +338,7 @@ public abstract class MinecraftMixin {
 						player.swing(InteractionHand.OFF_HAND);
 						this.rightClickDelay = LitTwoAnchorConfig.MAX_DELAY; // glowstone always at vanilla speed
 						this.littwoanchor$glowLatch = true;
+						littwoanchor$markCharged(mc, anchorHit.getBlockPos());
 					}
 					ci.cancel();
 					return;
