@@ -162,6 +162,13 @@ public abstract class MinecraftMixin {
 		this.littwoanchor$chargedAt = mc.level.getGameTime();
 	}
 
+	/** True for a short time after we placed this anchor. Stops fast clicking from stacking anchors on the one just placed. */
+	@Unique
+	private boolean littwoanchor$recentlyPlaced(Minecraft mc, BlockPos pos) {
+		return pos.equals(this.littwoanchor$placedPos)
+			&& mc.level.getGameTime() - this.littwoanchor$placedAt < 12;
+	}
+
 	@Unique
 	private void littwoanchor$queueCharge(Minecraft mc, BlockHitResult hit) {
 		if (this.littwoanchor$queuedHit == null) {
@@ -366,7 +373,12 @@ public abstract class MinecraftMixin {
 				if (charge >= 1) {
 					return;
 				}
-				// An empty anchor: fall through, so you can place an anchor on top of it or on its side like normal.
+				// An empty anchor: you can place on top of it or on its side like normal, but not right after
+				// you placed it, otherwise spamming or holding right click builds a tower of anchors.
+				if (littwoanchor$recentlyPlaced(mc, anchorHit.getBlockPos())) {
+					ci.cancel();
+					return;
+				}
 			}
 
 			// No spam: while right click is held after a placement, do not place another anchor.
@@ -415,6 +427,9 @@ public abstract class MinecraftMixin {
 			BlockState supportState = mc.level.getBlockState(support);
 			if (supportState.hasBlockEntity() || supportState.is(Blocks.CRAFTING_TABLE)) {
 				continue; // right clicking these would open a menu instead of placing
+			}
+			if (supportState.is(Blocks.RESPAWN_ANCHOR) && littwoanchor$recentlyPlaced(mc, support)) {
+				continue; // never build against the anchor that was just placed
 			}
 			if (supportState.is(Blocks.RESPAWN_ANCHOR)
 				&& supportState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= 1) {
