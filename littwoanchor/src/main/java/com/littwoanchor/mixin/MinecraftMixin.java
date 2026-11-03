@@ -419,6 +419,23 @@ public abstract class MinecraftMixin {
 			return;
 		}
 
+		// Air place only works right next to a glowed (charged) anchor, like the cpvp trick.
+		// Everywhere else an anchor is placed like vanilla (against blocks only).
+		boolean nextToGlowed = false;
+		for (Direction dir : Direction.values()) {
+			BlockPos near = pos.relative(dir);
+			BlockState nearState = mc.level.getBlockState(near);
+			if (nearState.is(Blocks.RESPAWN_ANCHOR)
+				&& (nearState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= 1
+					|| littwoanchor$chargePending(mc, near))) {
+				nextToGlowed = true;
+				break;
+			}
+		}
+		if (!nextToGlowed) {
+			return; // vanilla behaviour: nothing to place on
+		}
+
 		// Anti ghost: if a plain solid block (or another anchor) touches that spot, place against its face
 		// like a normal placement. Servers accept that. Only when nothing touches it do we click the empty space itself.
 		BlockHitResult placeHit = null;
@@ -444,10 +461,6 @@ public abstract class MinecraftMixin {
 			}
 		}
 		if (placeHit == null) {
-			if (!LitTwoAnchorConfig.pureAir) {
-				ci.cancel();
-				return;
-			}
 			// Click the (empty) block position itself. Air is replaceable, so the anchor lands right there.
 			placeHit = new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false);
 		}
