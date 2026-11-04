@@ -37,8 +37,17 @@ public abstract class MinecraftMixin {
 	/** An anchor never gets more than this many glowstone charges (vanilla allows 4). */
 	private static final int MAX_CHARGE = 1;
 
-	/** Minimum ticks between two air placements, so the server can keep up (prevents ghost anchors). */
-	private static final int AIR_PLACE_GAP_TICKS = 4;
+	/** Results of an air placement attempt. */
+	private static final int AIR_PASS = 0;   // not an air placement: leave the click to vanilla
+	private static final int AIR_DROP = 1;   // nothing valid to do: swallow the click
+	private static final int AIR_WAIT = 2;   // valid, but too soon after the last one: keep the click and retry
+	private static final int AIR_PLACED = 3; // anchor placed
+
+	/** A kept air click is dropped if it could not be done within this many ticks. */
+	private static final int AIR_QUEUE_TIMEOUT_TICKS = 6;
+
+	/** Furthest a support face may be from the eyes. Vanilla reach is 4.5, servers allow a little extra. */
+	private static final double SUPPORT_REACH = 5.0;
 
 	/** Minimum ticks a freshly placed anchor must exist before glowstone may be used on it. Raised automatically by ping. */
 	private static final int CONFIRM_TICKS = 3;
@@ -94,6 +103,23 @@ public abstract class MinecraftMixin {
 	private BlockHitResult littwoanchor$queuedHit = null;
 	@Unique
 	private long littwoanchor$queuedAt = -100L;
+
+	/** Air-place click that came too early. Done as soon as the gap since the last air placement has passed. */
+	@Unique
+	private boolean littwoanchor$queuedAir = false;
+	@Unique
+	private long littwoanchor$queuedAirAt = -100L;
+
+	/** Forget every latch and queued click. Used when the optimizer is switched off. */
+	@Unique
+	private void littwoanchor$resetState() {
+		this.littwoanchor$placeLatch = false;
+		this.littwoanchor$glowLatch = false;
+		this.littwoanchor$queuedHit = null;
+		this.littwoanchor$queuedPop = null;
+		this.littwoanchor$queuedAir = false;
+		this.littwoanchor$pendingPos = null;
+	}
 
 	private static boolean littwoanchor$isTarget(ItemStack stack) {
 		return stack.is(Items.TOTEM_OF_UNDYING)
@@ -184,6 +210,11 @@ public abstract class MinecraftMixin {
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void littwoanchor$onTick(CallbackInfo ci) {
 		Minecraft mc = (Minecraft) (Object) this;
+		// Switched off: do absolutely nothing, and drop anything still waiting so it cannot fire later.
+		if (!LitTwoAnchorConfig.enabled) {
+			littwoanchor$resetState();
+			return;
+		}
 		boolean useHeld = mc.options != null && mc.options.keyUse.isDown();
 		if (!useHeld) {
 			this.littwoanchor$placeLatch = false;
@@ -226,6 +257,22 @@ public abstract class MinecraftMixin {
 						popPlayer.swing(InteractionHand.MAIN_HAND);
 						this.rightClickDelay = LitTwoAnchorConfig.delay;
 					}
+				}
+			}
+		}
+
+		// Finish a kept air-place click as soon as the gap since the last air placement has passed.
+		if (this.littwoanchor$queuedAir) {
+			LocalPlayer airPlayer = mc.player;
+			if (airPlayer == null || mc.level == null || mc.gameMode == null
+				|| mc.level.getGameTime() - this.littwoanchor$queuedAirAt > AIR_QUEUE_TIMEOUT_TICKS) {
+				this.littwoanchor$queuedAir = false;
+			} else {
+				InteractionHand airHand = littwoanchor$activeHand(airPlayer);
+				if (airHand == null || !airPlayer.getItemInHand(airHand).is(Items.RESPAWN_ANCHOR)) {
+					this.littwoanchor$queuedAir = false;
+				} else if (littwoanchor$tryAirPlace(mc, airPlayer, airHand) != AIR_WAIT) {
+					this.littwoanchor$queuedAir = false;
 				}
 			}
 		}
@@ -401,22 +448,36 @@ public abstract class MinecraftMixin {
 			return;
 		}
 
-		// Anti ghost: never send air placements faster than the server can confirm them.
-		long now = mc.level.getGameTime();
-		if (now - this.littwoanchor$lastAirPlace < Math.min(AIR_PLACE_GAP_TICKS, Math.max(2, LitTwoAnchorConfig.delay))) {
+		int airResult = littwoanchor$tryAirPlace(mc, player, hand);
+		if (airResult == AIR_PLACED || airResult == AIR_DROP) {
 			ci.cancel();
-			return;
+		} else if (airResult == AIR_WAIT) {
+			// Too soon after the last air placement: keep the click and do it the moment it is safe,
+			// instead of losing it. (Sending it now is what the server rolls back.)
+			if (!this.littwoanchor$queuedAir) {
+				this.littwoanchor$queuedAir = true;
+				this.littwoanchor$queuedAirAt = mc.level.getGameTime();
+			}
+			ci.cancel();
 		}
+	}
 
-		Vec3 target = player.getEyePosition().add(player.getViewVector(1.0F).scale(AIR_PLACE_DISTANCE));
+	/**
+	 * Try to air place an anchor next to a glowed anchor, aiming where the player looks.
+	 * Only ever sends a click the server accepts: against a real full-block face that is in reach,
+	 * into a spot that is empty and free of entities. Clicking pure empty space is only done when pureAir is on.
+	 */
+	@Unique
+	private int littwoanchor$tryAirPlace(Minecraft mc, LocalPlayer player, InteractionHand hand) {
+		Vec3 eye = player.getEyePosition();
+		Vec3 target = eye.add(player.getViewVector(1.0F).scale(AIR_PLACE_DISTANCE));
 		BlockPos pos = BlockPos.containing(target);
 
 		// Air place only into empty space where nothing (you, a player, a mob) is standing.
 		// The server refuses those spots, which is what made anchors vanish after being placed.
 		if (!mc.level.getBlockState(pos).isAir()
 			|| !mc.level.isUnobstructed(Blocks.RESPAWN_ANCHOR.defaultBlockState(), pos, CollisionContext.of(player))) {
-			ci.cancel();
-			return;
+			return AIR_DROP;
 		}
 
 		// Air place only works right next to a glowed (charged) anchor, like the cpvp trick.
@@ -433,11 +494,10 @@ public abstract class MinecraftMixin {
 			}
 		}
 		if (!nextToGlowed) {
-			return; // vanilla behaviour: nothing to place on
+			return AIR_PASS; // vanilla behaviour: nothing to place on
 		}
 
-		// Anti ghost: if a plain solid block (or another anchor) touches that spot, place against its face
-		// like a normal placement. Servers accept that. Only when nothing touches it do we click the empty space itself.
+		// Anti ghost: place against the face of a real solid block, exactly like a normal placement.
 		BlockHitResult placeHit = null;
 		for (Direction dir : Direction.values()) {
 			BlockPos support = pos.relative(dir);
@@ -445,24 +505,38 @@ public abstract class MinecraftMixin {
 			if (supportState.hasBlockEntity() || supportState.is(Blocks.CRAFTING_TABLE)) {
 				continue; // right clicking these would open a menu instead of placing
 			}
-			if (supportState.is(Blocks.RESPAWN_ANCHOR) && littwoanchor$recentlyPlaced(mc, support)) {
-				continue; // never build against the anchor that was just placed
+			if (supportState.is(Blocks.RESPAWN_ANCHOR)
+				&& (littwoanchor$recentlyPlaced(mc, support) || littwoanchor$isUnconfirmed(mc, support))) {
+				continue; // never build against an anchor the server may not have confirmed yet
 			}
 			if (supportState.is(Blocks.RESPAWN_ANCHOR)
 				&& supportState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= 1) {
 				continue; // right clicking a charged anchor would detonate it
 			}
-			if (supportState.isCollisionShapeFullBlock(mc.level, support)) {
-				Direction face = dir.getOpposite();
-				Vec3 location = Vec3.atCenterOf(support)
-					.add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
-				placeHit = new BlockHitResult(location, face, support, false);
-				break;
+			if (!supportState.isCollisionShapeFullBlock(mc.level, support)) {
+				continue;
 			}
+			Direction face = dir.getOpposite();
+			Vec3 location = Vec3.atCenterOf(support)
+				.add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
+			if (eye.distanceToSqr(location) > SUPPORT_REACH * SUPPORT_REACH) {
+				continue; // too far: the server would refuse it
+			}
+			placeHit = new BlockHitResult(location, face, support, false);
+			break;
 		}
 		if (placeHit == null) {
-			// Click the (empty) block position itself. Air is replaceable, so the anchor lands right there.
+			if (!LitTwoAnchorConfig.pureAir) {
+				return AIR_PASS; // nothing solid to place against: never send a placement the server may roll back
+			}
+			// pureAir on: click the (empty) block position itself. Air is replaceable, so the anchor lands there.
 			placeHit = new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false);
+		}
+
+		// Anti ghost: never send air placements faster than the server can confirm them.
+		long now = mc.level.getGameTime();
+		if (now - this.littwoanchor$lastAirPlace < Math.max(1, LitTwoAnchorConfig.delay)) {
+			return AIR_WAIT;
 		}
 
 		InteractionResult result = mc.gameMode.useItemOn(player, hand, placeHit);
@@ -473,8 +547,9 @@ public abstract class MinecraftMixin {
 			this.littwoanchor$placedAt = now;
 			this.littwoanchor$placeLatch = true;
 			this.rightClickDelay = LitTwoAnchorConfig.delay;
-			ci.cancel();
+			return AIR_PLACED;
 		}
+		return AIR_PASS;
 	}
 
 	/**
