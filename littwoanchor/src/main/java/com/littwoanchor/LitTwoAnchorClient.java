@@ -93,7 +93,7 @@ public class LitTwoAnchorClient implements ClientModInitializer {
 			+ " tick" + (LitTwoAnchorConfig.delay == 1 ? "" : "s")
 			+ " (0 = fastest, " + LitTwoAnchorConfig.MAX_DELAY + " = vanilla)"
 			+ "  |  empty-space air place " + (LitTwoAnchorConfig.pureAir ? "ON" : "OFF");
-		client.player.displayClientMessage(Component.literal(text), false);
+		// Action bar only: one message per press instead of the same line in chat and on screen.
 		client.player.displayClientMessage(Component.literal(text), true);
 	}
 }
