@@ -41,10 +41,15 @@ public final class LitTwoAnchorConfig {
 		try (Reader reader = Files.newBufferedReader(path)) {
 			Properties props = new Properties();
 			props.load(reader);
-			enabled = Boolean.parseBoolean(props.getProperty("enabled", "true"));
-			delay = clamp(Integer.parseInt(props.getProperty("delay", "2").trim()));
-			pureAir = Boolean.parseBoolean(props.getProperty("pureAir", "false"));
-		} catch (IOException | NumberFormatException e) {
+			// Each setting is read on its own, so one bad line cannot reset the others (e.g. the on/off state).
+			enabled = Boolean.parseBoolean(props.getProperty("enabled", "true").trim());
+			pureAir = Boolean.parseBoolean(props.getProperty("pureAir", "false").trim());
+			try {
+				delay = clamp(Integer.parseInt(props.getProperty("delay", "2").trim()));
+			} catch (NumberFormatException e) {
+				delay = 2;
+			}
+		} catch (IOException e) {
 			enabled = true;
 			delay = 2;
 			pureAir = false;
