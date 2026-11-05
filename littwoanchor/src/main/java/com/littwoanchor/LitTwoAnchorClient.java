@@ -5,8 +5,10 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.KeyMapping;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.Identifier;
 
 public class LitTwoAnchorClient implements ClientModInitializer {
@@ -58,8 +60,14 @@ public class LitTwoAnchorClient implements ClientModInitializer {
 
 		if (!welcomed && client.player != null) {
 			welcomed = true;
-			client.player.displayClientMessage(Component.literal(
-				"[LitTwoAnchor] loaded.  / = on/off   \\ = empty-space air place   [ ] = speed"), false);
+			client.player.displayClientMessage(
+				badge()
+					.append(part(" loaded", ChatFormatting.GRAY))
+					.append(sep())
+					.append(part("/", ChatFormatting.WHITE)).append(part(" toggle  ", ChatFormatting.DARK_GRAY))
+					.append(part("\\", ChatFormatting.WHITE)).append(part(" air  ", ChatFormatting.DARK_GRAY))
+					.append(part("[ ]", ChatFormatting.WHITE)).append(part(" speed", ChatFormatting.DARK_GRAY)),
+				false);
 		}
 
 		while (toggleKey.consumeClick()) {
@@ -84,16 +92,55 @@ public class LitTwoAnchorClient implements ClientModInitializer {
 		}
 	}
 
+	private static MutableComponent part(String text, ChatFormatting... formats) {
+		return Component.literal(text).withStyle(formats);
+	}
+
+	/** Gray divider between sections. */
+	private static MutableComponent sep() {
+		return part("  |  ", ChatFormatting.DARK_GRAY);
+	}
+
+	/** "* LitTwo Anchor" title in bold aqua. */
+	private static MutableComponent badge() {
+		return part("\u2726 LitTwo Anchor", ChatFormatting.AQUA, ChatFormatting.BOLD);
+	}
+
+	/** Speed name for a delay value: 0 ticks = MAX ... vanilla delay = VANILLA. */
+	private static MutableComponent speedLabel(int delay) {
+		return switch (delay) {
+			case 0 -> part("MAX", ChatFormatting.GREEN, ChatFormatting.BOLD);
+			case 1 -> part("HIGH", ChatFormatting.GREEN);
+			case 2 -> part("MED", ChatFormatting.YELLOW);
+			case 3 -> part("LOW", ChatFormatting.GOLD);
+			default -> part("VANILLA", ChatFormatting.RED);
+		};
+	}
+
 	private static void announce(Minecraft client) {
 		if (client.player == null) {
 			return;
 		}
-		String text = "[LitTwoAnchor] " + (LitTwoAnchorConfig.enabled ? "ON" : "OFF")
-			+ "  |  delay " + LitTwoAnchorConfig.delay
-			+ " tick" + (LitTwoAnchorConfig.delay == 1 ? "" : "s")
-			+ " (0 = fastest, " + LitTwoAnchorConfig.MAX_DELAY + " = vanilla)"
-			+ "  |  empty-space air place " + (LitTwoAnchorConfig.pureAir ? "ON" : "OFF");
-		// Action bar only: one message per press instead of the same line in chat and on screen.
-		client.player.displayClientMessage(Component.literal(text), true);
+		boolean on = LitTwoAnchorConfig.enabled;
+		boolean air = LitTwoAnchorConfig.pureAir;
+
+		MutableComponent line = badge()
+			.append(sep())
+			.append(on
+				? part("\u25CF ON", ChatFormatting.GREEN, ChatFormatting.BOLD)
+				: part("\u25CF OFF", ChatFormatting.RED, ChatFormatting.BOLD));
+
+		if (on) {
+			line.append(sep())
+				.append(part("Speed ", ChatFormatting.GRAY))
+				.append(speedLabel(LitTwoAnchorConfig.delay))
+				.append(sep())
+				.append(part("Air ", ChatFormatting.GRAY))
+				.append(air
+					? part("\u25CF ON", ChatFormatting.GREEN)
+					: part("\u25CB OFF", ChatFormatting.DARK_GRAY));
+		}
+		// Action bar only: one clean line per press.
+		client.player.displayClientMessage(line, true);
 	}
 }
