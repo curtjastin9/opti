@@ -55,6 +55,14 @@ public abstract class MinecraftMixin {
 	/** A queued glowstone charge is dropped if it could not be done within this many ticks. */
 	private static final int QUEUE_TIMEOUT_TICKS = 40;
 
+	/** Our own tick clock: counts every client tick, never stalls or jumps like the server game time can under lag. */
+	@Unique
+	private long littwoanchor$tick = 0L;
+
+	/** Tick of the last anchor / glowstone click we let through. Only one such click per tick (0 delay can fire twice). */
+	@Unique
+	private long littwoanchor$lastUseTick = -100L;
+
 	@Unique
 	private long littwoanchor$lastAirPlace = -100L;
 
@@ -172,34 +180,34 @@ public abstract class MinecraftMixin {
 	@Unique
 	private boolean littwoanchor$isUnconfirmed(Minecraft mc, BlockPos pos) {
 		return pos.equals(this.littwoanchor$placedPos)
-			&& mc.level.getGameTime() - this.littwoanchor$placedAt < littwoanchor$confirmTicks(mc);
+			&& this.littwoanchor$tick - this.littwoanchor$placedAt < littwoanchor$confirmTicks(mc);
 	}
 
 	/** True while a glowstone we sent to this anchor is still waiting for the server to confirm the charge. */
 	@Unique
 	private boolean littwoanchor$chargePending(Minecraft mc, BlockPos pos) {
 		return pos.equals(this.littwoanchor$chargedPos)
-			&& mc.level.getGameTime() - this.littwoanchor$chargedAt < littwoanchor$confirmTicks(mc) + 2;
+			&& this.littwoanchor$tick - this.littwoanchor$chargedAt < littwoanchor$confirmTicks(mc) + 2;
 	}
 
 	@Unique
 	private void littwoanchor$markCharged(Minecraft mc, BlockPos pos) {
 		this.littwoanchor$chargedPos = pos;
-		this.littwoanchor$chargedAt = mc.level.getGameTime();
+		this.littwoanchor$chargedAt = this.littwoanchor$tick;
 	}
 
 	/** True for a short time after we placed this anchor. Stops fast clicking from stacking anchors on the one just placed. */
 	@Unique
 	private boolean littwoanchor$recentlyPlaced(Minecraft mc, BlockPos pos) {
 		return pos.equals(this.littwoanchor$placedPos)
-			&& mc.level.getGameTime() - this.littwoanchor$placedAt < 12;
+			&& this.littwoanchor$tick - this.littwoanchor$placedAt < 12;
 	}
 
 	@Unique
 	private void littwoanchor$queueCharge(Minecraft mc, BlockHitResult hit) {
 		if (this.littwoanchor$queuedHit == null) {
 			this.littwoanchor$queuedHit = hit;
-			this.littwoanchor$queuedAt = mc.level.getGameTime();
+			this.littwoanchor$queuedAt = this.littwoanchor$tick;
 		}
 	}
 
@@ -210,6 +218,7 @@ public abstract class MinecraftMixin {
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void littwoanchor$onTick(CallbackInfo ci) {
 		Minecraft mc = (Minecraft) (Object) this;
+		this.littwoanchor$tick++;
 		// Switched off: do absolutely nothing, and drop anything still waiting so it cannot fire later.
 		if (!LitTwoAnchorConfig.enabled) {
 			littwoanchor$resetState();
@@ -243,15 +252,17 @@ public abstract class MinecraftMixin {
 			} else {
 				BlockPos popPos = pop.getBlockPos();
 				BlockState popState = mc.level.getBlockState(popPos);
-				long popNow = mc.level.getGameTime();
+				long popNow = this.littwoanchor$tick;
 				ItemStack popMain = popPlayer.getMainHandItem();
 				if (popNow - this.littwoanchor$queuedPopAt > littwoanchor$confirmTicks(mc) + 2
 					|| !popState.is(Blocks.RESPAWN_ANCHOR)
 					|| popMain.is(Items.GLOWSTONE)
 					|| popPlayer.getEyePosition().distanceToSqr(Vec3.atCenterOf(popPos)) > 6.0 * 6.0) {
 					this.littwoanchor$queuedPop = null;
-				} else if (popState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= 1) {
+				} else if (popState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) >= 1
+						&& this.littwoanchor$lastUseTick != this.littwoanchor$tick) {
 					this.littwoanchor$queuedPop = null;
+					this.littwoanchor$lastUseTick = this.littwoanchor$tick;
 					InteractionResult popResult = mc.gameMode.useItemOn(popPlayer, InteractionHand.MAIN_HAND, pop);
 					if (popResult.consumesAction()) {
 						popPlayer.swing(InteractionHand.MAIN_HAND);
@@ -265,13 +276,14 @@ public abstract class MinecraftMixin {
 		if (this.littwoanchor$queuedAir) {
 			LocalPlayer airPlayer = mc.player;
 			if (airPlayer == null || mc.level == null || mc.gameMode == null
-				|| mc.level.getGameTime() - this.littwoanchor$queuedAirAt > AIR_QUEUE_TIMEOUT_TICKS) {
+				|| this.littwoanchor$tick - this.littwoanchor$queuedAirAt > AIR_QUEUE_TIMEOUT_TICKS) {
 				this.littwoanchor$queuedAir = false;
 			} else {
 				InteractionHand airHand = littwoanchor$activeHand(airPlayer);
 				if (airHand == null || !airPlayer.getItemInHand(airHand).is(Items.RESPAWN_ANCHOR)) {
 					this.littwoanchor$queuedAir = false;
-				} else if (littwoanchor$tryAirPlace(mc, airPlayer, airHand) != AIR_WAIT) {
+				} else if (this.littwoanchor$lastUseTick != this.littwoanchor$tick
+					&& littwoanchor$tryAirPlace(mc, airPlayer, airHand) != AIR_WAIT) {
 					this.littwoanchor$queuedAir = false;
 				}
 			}
@@ -288,7 +300,7 @@ public abstract class MinecraftMixin {
 		}
 		BlockPos pos = queued.getBlockPos();
 		BlockState state = mc.level.getBlockState(pos);
-		long now = mc.level.getGameTime();
+		long now = this.littwoanchor$tick;
 
 		// The anchor is gone (server refused it) or already charged: nothing to do.
 		if (now - this.littwoanchor$queuedAt > QUEUE_TIMEOUT_TICKS
@@ -305,6 +317,10 @@ public abstract class MinecraftMixin {
 			this.littwoanchor$queuedHit = null;
 			return;
 		}
+		if (this.littwoanchor$lastUseTick == this.littwoanchor$tick) {
+			return; // something else was already sent this tick: wait one tick
+		}
+		this.littwoanchor$lastUseTick = this.littwoanchor$tick;
 		this.littwoanchor$queuedHit = null;
 		InteractionResult result = mc.gameMode.useItemOn(player, hand, queued);
 		if (result.consumesAction()) {
@@ -328,6 +344,16 @@ public abstract class MinecraftMixin {
 			return;
 		}
 
+		// 0 delay lets vanilla fire a click AND the held key in the same tick. The second one lands on an
+		// anchor that just changed (not placed / not popped / ghost). One anchor action per tick, always.
+		if (littwoanchor$activeHand(player) != null) {
+			if (this.littwoanchor$lastUseTick == this.littwoanchor$tick) {
+				ci.cancel();
+				return;
+			}
+			this.littwoanchor$lastUseTick = this.littwoanchor$tick;
+		}
+
 		HitResult hit = mc.hitResult;
 
 		// Pop right after glow: you glowed the anchor and quickly switched to another item and clicked.
@@ -344,7 +370,7 @@ public abstract class MinecraftMixin {
 					&& popState.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES) < 1) {
 					if (this.littwoanchor$queuedPop == null) {
 						this.littwoanchor$queuedPop = popHit;
-						this.littwoanchor$queuedPopAt = mc.level.getGameTime();
+						this.littwoanchor$queuedPopAt = this.littwoanchor$tick;
 					}
 					ci.cancel();
 					return;
@@ -456,7 +482,7 @@ public abstract class MinecraftMixin {
 			// instead of losing it. (Sending it now is what the server rolls back.)
 			if (!this.littwoanchor$queuedAir) {
 				this.littwoanchor$queuedAir = true;
-				this.littwoanchor$queuedAirAt = mc.level.getGameTime();
+				this.littwoanchor$queuedAirAt = this.littwoanchor$tick;
 			}
 			ci.cancel();
 		}
@@ -534,8 +560,8 @@ public abstract class MinecraftMixin {
 		}
 
 		// Anti ghost: never send air placements faster than the server can confirm them.
-		long now = mc.level.getGameTime();
-		if (now - this.littwoanchor$lastAirPlace < Math.max(1, LitTwoAnchorConfig.delay)) {
+		long now = this.littwoanchor$tick;
+		if (now - this.littwoanchor$lastAirPlace < Math.max(2, LitTwoAnchorConfig.delay)) {
 			return AIR_WAIT;
 		}
 
@@ -565,7 +591,7 @@ public abstract class MinecraftMixin {
 		if (this.littwoanchor$pendingPos != null && mc.level != null) {
 			if (mc.level.getBlockState(this.littwoanchor$pendingPos).is(Blocks.RESPAWN_ANCHOR)) {
 				this.littwoanchor$placedPos = this.littwoanchor$pendingPos;
-				this.littwoanchor$placedAt = mc.level.getGameTime();
+				this.littwoanchor$placedAt = this.littwoanchor$tick;
 				this.littwoanchor$placeLatch = true;
 			}
 			this.littwoanchor$pendingPos = null;
