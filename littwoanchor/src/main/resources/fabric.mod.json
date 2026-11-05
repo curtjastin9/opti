@@ -1,9 +1,9 @@
 {
 	"schemaVersion": 1,
-	"id": "littwocrystal",
+	"id": "littwoanchor",
 	"version": "${version}",
-	"name": "LitTwo Crystal Optimizer",
-	"description": "LitTwo Crystal Optimizer makes End Crystal placement faster and smoother. It improves crystal usage during combat by optimizing placement speed and making crystal interactions more responsive.\n\nFeatures:\n- Faster End Crystal placement\n- Adjustable crystal placement speed\n- Optimized crystal placement behavior\n- Improved combat responsiveness\n- Customizable toggle and speed keybinds\n\nStatus: Beta (Work in Progress)\n\nDisclaimer: Use this mod at your own risk! Some servers may consider its features an unfair advantage and may issue bans for using it. We are not responsible for any bans or penalties resulting from its use. Play smart and use responsibly.",
+	"name": "LitTwoAnchor",
+	"description": "Client-side | Beta\n\nLitTwoAnchor is a beta Minecraft optimization mod designed to make Respawn Anchor placement and charging faster and easier. It improves anchor usage by automating placement and Glowstone charging, with customizable speed settings and keybinds.\n\nFeatures:\n* Adjustable anchor placement speed\n* Faster Respawn Anchor placement\n* Glowstone charging support\n* Totem detection\n* Customizable toggle and speed keybinds\n\nStatus: Beta (Work in Progress)\n\nDisclaimer: Use this mod at your own risk! Some servers may consider its features unfair advantages and may issue bans for using it. We're not responsible for any bans or penalties resulting from its use. Play smart, use responsibly, and enjoy being one step ahead! \uD83D\uDC9C",
 	"authors": [
 		"Dr_LitTwo"
 	],
@@ -11,15 +11,15 @@
 		"Claude (AI coding assistance)"
 	],
 	"license": "MIT",
-	"icon": "assets/littwocrystal/icon.png",
+	"icon": "assets/littwoanchor/icon.png",
 	"environment": "client",
 	"entrypoints": {
 		"client": [
-			"com.littwocrystal.LitTwoCrystalClient"
+			"com.littwoanchor.LitTwoAnchorClient"
 		]
 	},
 	"mixins": [
-		"littwocrystal.mixins.json"
+		"littwoanchor.mixins.json"
 	],
 	"custom": {
 		"modmenu": {
