@@ -1,26 +1,33 @@
 {
 	"schemaVersion": 1,
-	"id": "littwoanchor",
+	"id": "littwocrystal",
 	"version": "${version}",
-	"name": "LitTwoAnchor",
-	"description": "Client-side | Beta\nLitTwoAnchor is an early beta anchor placement optimizer, built from an idea by Dr_LitTwo and vibe-coded with a lot of help from Claude. It speeds up placing Respawn Anchors and charging them with glowstone, and only kicks in when you're holding an anchor, glowstone or a totem. Expect a few bugs and changes while it's still being worked on.\nFeatures: adjustable placement speed, faster placing for anchors, glowstone and totems, and toggle and speed keys you can rebind in Controls.\nStatus: Beta, a work in progress.",
+	"name": "LitTwo Crystal Optimizer",
+	"description": "LitTwo Crystal Optimizer makes End Crystal placement faster and smoother. It improves crystal usage during combat by optimizing placement speed and making crystal interactions more responsive.\n\nFeatures:\n- Faster End Crystal placement\n- Adjustable crystal placement speed\n- Optimized crystal placement behavior\n- Improved combat responsiveness\n- Customizable toggle and speed keybinds\n\nStatus: Beta (Work in Progress)\n\nDisclaimer: Use this mod at your own risk! Some servers may consider its features an unfair advantage and may issue bans for using it. We are not responsible for any bans or penalties resulting from its use. Play smart and use responsibly.",
 	"authors": [
 		"Dr_LitTwo"
 	],
 	"contributors": [
-		"Claude (vibe coding help)"
+		"Claude (AI coding assistance)"
 	],
 	"license": "MIT",
-	"icon": "assets/littwoanchor/icon.png",
+	"icon": "assets/littwocrystal/icon.png",
 	"environment": "client",
 	"entrypoints": {
 		"client": [
-			"com.littwoanchor.LitTwoAnchorClient"
+			"com.littwocrystal.LitTwoCrystalClient"
 		]
 	},
 	"mixins": [
-		"littwoanchor.mixins.json"
+		"littwocrystal.mixins.json"
 	],
+	"custom": {
+		"modmenu": {
+			"badges": [
+				"client"
+			]
+		}
+	},
 	"depends": {
 		"fabricloader": ">=0.16.0",
 		"fabric-api": "*",
